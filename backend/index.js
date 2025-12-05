@@ -69,10 +69,25 @@ const connectDB = async () => {
   }
 };
 
-// Health check endpoint
+// Root route - Welcome message
+app.get('/', (req, res) => {
+  res.json({
+    message: '🚀 AI Assignment Evaluator API',
+    status: 'running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      evaluate: '/api/evaluate',
+      feedback: '/api/feedback',
+      blog: '/api/blog'
+    }
+  });
+});
+
+// Health check route
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
     mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
