@@ -1,0 +1,488 @@
+import { useState, useCallback } from 'react';
+import { useDropzone } from 'react-dropzone';
+import { evaluateAssignment, evaluateText, getAssignment } from '../services/groqAPI';
+import { getAssignmentHistory } from '../services/firebaseDB';
+import toast from 'react-hot-toast';
+import { 
+  Upload, 
+  FileText, 
+  Loader2, 
+  CheckCircle, 
+  AlertCircle,
+  Download,
+  History,
+  X,
+  Star,
+  TrendingUp,
+  AlertTriangle,
+  Lightbulb,
+  RefreshCw
+} from 'lucide-react';
+import jsPDF from 'jspdf';
+
+export default function AssignmentEvaluator() {
+  const [file, setFile] = useState(null);
+  const [text, setText] = useState('');
+  const [mode, setMode] = useState('upload'); // 'upload' or 'text'
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const onDrop = useCallback((acceptedFiles) => {
+    const file = acceptedFiles[0];
+    if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error('File size must be less than 10MB');
+        return;
+      }
+      setFile(file);
+      setResult(null);
+    }
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'application/pdf': ['.pdf'],
+      'text/plain': ['.txt']
+    },
+    maxFiles: 1
+  });
+
+  const handleEvaluate = async () => {
+    if (mode === 'upload' && !file) {
+      toast.error('Please upload a file first');
+      return;
+    }
+    if (mode === 'text' && text.length < 50) {
+      toast.error('Text must be at least 50 characters');
+      return;
+    }
+
+    setLoading(true);
+    setProgress(0);
+
+    try {
+      let response;
+      if (mode === 'upload') {
+        response = await evaluateAssignment(file, setProgress);
+      } else {
+        response = await evaluateText(text);
+      }
+
+      setResult(response.evaluation);
+      toast.success('Evaluation complete!');
+    } catch (error) {
+      console.error('Evaluation error:', error);
+      toast.error(error.response?.data?.error || 'Failed to evaluate');
+    } finally {
+      setLoading(false);
+      setProgress(0);
+    }
+  };
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const data = await getAssignmentHistory(1, 10);
+      setHistory(data.assignments || []);
+    } catch (error) {
+      toast.error('Failed to load history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleShowHistory = () => {
+    if (!showHistory) {
+      loadHistory();
+    }
+    setShowHistory(!showHistory);
+  };
+
+  const downloadPDF = () => {
+    if (!result) return;
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    
+    // Header
+    doc.setFillColor(59, 130, 246);
+    doc.rect(0, 0, pageWidth, 40, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(24);
+    doc.text('Assignment Evaluation Report', 20, 25);
+    
+    // Score
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(16);
+    doc.text(`Score: ${result.score}/10`, 20, 55);
+    
+    // Feedback
+    doc.setFontSize(14);
+    doc.text('Overall Feedback:', 20, 70);
+    doc.setFontSize(11);
+    const feedbackLines = doc.splitTextToSize(result.feedback?.feedback || '', pageWidth - 40);
+    doc.text(feedbackLines, 20, 80);
+    
+    let yPos = 80 + (feedbackLines.length * 6);
+    
+    // Strengths
+    if (result.feedback?.strengths?.length > 0) {
+      yPos += 15;
+      doc.setFontSize(14);
+      doc.setTextColor(34, 197, 94);
+      doc.text('Strengths:', 20, yPos);
+      doc.setFontSize(11);
+      doc.setTextColor(0, 0, 0);
+      result.feedback.strengths.forEach((s, i) => {
+        yPos += 8;
+        doc.text(`• ${s}`, 25, yPos);
+      });
+    }
+    
+    // Weaknesses
+    if (result.feedback?.weaknesses?.length > 0) {
+      yPos += 15;
+      doc.setFontSize(14);
+      doc.setTextColor(239, 68, 68);
+      doc.text('Areas for Improvement:', 20, yPos);
+      doc.setFontSize(11);
+      doc.setTextColor(0, 0, 0);
+      result.feedback.weaknesses.forEach((w, i) => {
+        yPos += 8;
+        doc.text(`• ${w}`, 25, yPos);
+      });
+    }
+    
+    // Suggestions
+    if (result.feedback?.suggestions?.length > 0) {
+      yPos += 15;
+      doc.setFontSize(14);
+      doc.setTextColor(59, 130, 246);
+      doc.text('Suggestions:', 20, yPos);
+      doc.setFontSize(11);
+      doc.setTextColor(0, 0, 0);
+      result.feedback.suggestions.forEach((s, i) => {
+        yPos += 8;
+        const lines = doc.splitTextToSize(`• ${s}`, pageWidth - 45);
+        doc.text(lines, 25, yPos);
+        yPos += (lines.length - 1) * 6;
+      });
+    }
+    
+    // Footer
+    doc.setFontSize(10);
+    doc.setTextColor(128, 128, 128);
+    doc.text(`Generated by AI-Assign-Eval on ${new Date().toLocaleDateString()}`, 20, 280);
+    
+    doc.save('evaluation-report.pdf');
+    toast.success('PDF downloaded!');
+  };
+
+  const getScoreColor = (score) => {
+    if (score >= 8) return 'text-green-600 dark:text-green-400';
+    if (score >= 6) return 'text-yellow-600 dark:text-yellow-400';
+    if (score >= 4) return 'text-orange-600 dark:text-orange-400';
+    return 'text-red-600 dark:text-red-400';
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Assignment Evaluator</h1>
+          <p className="text-gray-600 dark:text-gray-400">Upload your assignment for AI-powered analysis</p>
+        </div>
+        <button onClick={handleShowHistory} className="btn-secondary">
+          <History className="w-4 h-4 mr-2" />
+          History
+        </button>
+      </div>
+
+      {/* Mode Toggle */}
+      <div className="card p-1 inline-flex">
+        <button
+          onClick={() => { setMode('upload'); setResult(null); }}
+          className={`px-4 py-2 rounded-lg font-medium transition-all ${
+            mode === 'upload' 
+              ? 'bg-primary-600 text-white' 
+              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+          }`}
+        >
+          Upload PDF
+        </button>
+        <button
+          onClick={() => { setMode('text'); setResult(null); }}
+          className={`px-4 py-2 rounded-lg font-medium transition-all ${
+            mode === 'text' 
+              ? 'bg-primary-600 text-white' 
+              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+          }`}
+        >
+          Paste Text
+        </button>
+      </div>
+
+      {/* Upload Area */}
+      {mode === 'upload' ? (
+        <div className="card p-6">
+          <div
+            {...getRootProps()}
+            className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+              isDragActive 
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/10' 
+                : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
+            }`}
+          >
+            <input {...getInputProps()} />
+            <Upload className={`w-12 h-12 mx-auto mb-4 ${isDragActive ? 'text-primary-500' : 'text-gray-400'}`} />
+            {file ? (
+              <div className="flex items-center justify-center gap-2">
+                <FileText className="w-5 h-5 text-primary-600" />
+                <span className="font-medium text-gray-900 dark:text-white">{file.name}</span>
+                <button onClick={(e) => { e.stopPropagation(); setFile(null); }} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <p className="text-gray-600 dark:text-gray-400 mb-2">
+                  {isDragActive ? 'Drop the file here' : 'Drag & drop your PDF here, or click to browse'}
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-500">
+                  PDF or TXT files up to 10MB
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="card p-6">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Paste your assignment text here (minimum 50 characters)..."
+            className="input min-h-[200px] resize-y"
+          />
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+            {text.length} characters {text.length < 50 && '(minimum 50)'}
+          </p>
+        </div>
+      )}
+
+      {/* Evaluate Button */}
+      <button
+        onClick={handleEvaluate}
+        disabled={loading || (mode === 'upload' && !file) || (mode === 'text' && text.length < 50)}
+        className="btn-primary w-full py-3"
+      >
+        {loading ? (
+          <>
+            <Loader2 className="w-5 h-5 animate-spin mr-2" />
+            {progress > 0 ? `Uploading... ${progress}%` : 'Analyzing...'}
+          </>
+        ) : (
+          <>
+            <TrendingUp className="w-5 h-5 mr-2" />
+            Evaluate Assignment
+          </>
+        )}
+      </button>
+
+      {/* Results */}
+      {result && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Score Card */}
+          <div className="card p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Evaluation Results</h2>
+              <button onClick={downloadPDF} className="btn-secondary text-sm">
+                <Download className="w-4 h-4 mr-2" />
+                Download PDF
+              </button>
+            </div>
+
+            <div className="flex items-center gap-6 mb-6">
+              <div className={`text-6xl font-bold ${getScoreColor(result.score)}`}>
+                {result.score}
+                <span className="text-2xl text-gray-400">/10</span>
+              </div>
+              <div className="flex-1">
+                <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className={`h-full rounded-full transition-all duration-1000 ${
+                      result.score >= 8 ? 'bg-green-500' :
+                      result.score >= 6 ? 'bg-yellow-500' :
+                      result.score >= 4 ? 'bg-orange-500' : 'bg-red-500'
+                    }`}
+                    style={{ width: `${result.score * 10}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-gray-600 dark:text-gray-400">{result.feedback?.feedback}</p>
+              </div>
+            </div>
+
+            {/* Stats */}
+            {result.textStats && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{result.textStats.wordCount}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Words</p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{result.textStats.sentenceCount}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Sentences</p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{result.textStats.paragraphCount}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Paragraphs</p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{result.textStats.averageWordLength}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Avg Word Length</p>
+                </div>
+              </div>
+            )}
+
+            {/* Plagiarism Analysis */}
+            {result.plagiarismAnalysis && (
+              <div className="bg-yellow-50 dark:bg-yellow-900/10 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-6">
+                <h3 className="font-medium text-yellow-800 dark:text-yellow-200 flex items-center gap-2 mb-2">
+                  <AlertTriangle className="w-5 h-5" />
+                  AI & Plagiarism Detection
+                </h3>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">AI Likelihood: </span>
+                    <span className="font-medium text-gray-900 dark:text-white">{result.plagiarismAnalysis.aiLikelihood}%</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">Plagiarism Risk: </span>
+                    <span className={`font-medium ${
+                      result.plagiarismAnalysis.plagiarismRisk === 'Low' ? 'text-green-600 dark:text-green-400' :
+                      result.plagiarismAnalysis.plagiarismRisk === 'Medium' ? 'text-yellow-600 dark:text-yellow-400' :
+                      'text-red-600 dark:text-red-400'
+                    }`}>{result.plagiarismAnalysis.plagiarismRisk}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Strengths */}
+          {result.feedback?.strengths?.length > 0 && (
+            <div className="card p-6">
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-green-500" />
+                Strengths
+              </h3>
+              <ul className="space-y-2">
+                {result.feedback.strengths.map((item, i) => (
+                  <li key={i} className="flex items-start gap-2 text-gray-700 dark:text-gray-300">
+                    <Star className="w-4 h-4 text-green-500 mt-1 flex-shrink-0" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Weaknesses */}
+          {result.feedback?.weaknesses?.length > 0 && (
+            <div className="card p-6">
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-red-500" />
+                Areas for Improvement
+              </h3>
+              <ul className="space-y-2">
+                {result.feedback.weaknesses.map((item, i) => (
+                  <li key={i} className="flex items-start gap-2 text-gray-700 dark:text-gray-300">
+                    <AlertCircle className="w-4 h-4 text-red-500 mt-1 flex-shrink-0" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Suggestions */}
+          {result.feedback?.suggestions?.length > 0 && (
+            <div className="card p-6">
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <Lightbulb className="w-5 h-5 text-yellow-500" />
+                Suggestions
+              </h3>
+              <ul className="space-y-2">
+                {result.feedback.suggestions.map((item, i) => (
+                  <li key={i} className="flex items-start gap-2 text-gray-700 dark:text-gray-300">
+                    <Lightbulb className="w-4 h-4 text-yellow-500 mt-1 flex-shrink-0" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Improved Version */}
+          {result.feedback?.improvedVersion && (
+            <div className="card p-6">
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-primary-500" />
+                Enhanced Version
+              </h3>
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
+                <p className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                  {result.feedback.improvedVersion}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* History Modal */}
+      {showHistory && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="card max-w-2xl w-full max-h-[80vh] overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Evaluation History</h2>
+              <button onClick={() => setShowHistory(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto max-h-[60vh]">
+              {historyLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-primary-600" />
+                </div>
+              ) : history.length > 0 ? (
+                <div className="space-y-3">
+                  {history.map((item) => (
+                    <div key={item._id} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-white">{item.fileName}</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          {new Date(item.uploadDate).toLocaleString()}
+                        </p>
+                      </div>
+                      <div className={`text-2xl font-bold ${getScoreColor(item.score)}`}>
+                        {item.score}/10
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-gray-500 dark:text-gray-400 py-8">No evaluations yet</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

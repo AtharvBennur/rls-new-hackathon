@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment variables (IMPORTANT: Never commit these!)
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Uploads (local files)
+backend/uploads/
+uploads/
+
+# Cache
+.cache/
+.parcel-cache/
+
+# Testing
+coverage/
+
+# Misc
+*.pem
+*.key
